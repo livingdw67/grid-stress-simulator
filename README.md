@@ -20,8 +20,8 @@ This project helps utilities prepare for the **Inflation Reduction Act**. It dem
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/livingdw67/ira-housing-project.git](https://github.com/livingdw67/ira-housing-project.git)
-    cd ira-housing-project
+    git clone [https://github.com/livingdw67/grid-stress-simulator.git](https://github.com/livingdw67/grid-stress-simulator.git)
+    cd grid-stress-simulator
     ```
 
 2.  **Install dependencies:**
