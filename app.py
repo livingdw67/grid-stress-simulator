@@ -1,206 +1,161 @@
-import streamlit as st
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import streamlit as st
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="IRA Grid Simulator", layout="wide")
+st.set_page_config(page_title="IRA Grid Stress Simulator", layout="wide")
 
-# --- CUSTOM CSS FOR READABILITY ---
-st.markdown("""
-    <style>
-        /* Change the global font to a clean sans-serif */
-        html, body, [class*="css"] {
-            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
-        }
-        /* Make headers stand out more */
-        h1, h2, h3 {
-            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
-            font-weight: 700 !important;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# ResStock reports energy per 15-minute interval (kWh). Average power over the
+# interval (kW) = kWh / 0.25 h = kWh * 4.
+INTERVALS_PER_HOUR = 4
+FURNACE_EFFICIENCY = 0.80  # Share of fuel energy a typical gas/propane/oil furnace delivers as heat
+
+SC_COUNTIES = {
+    "001": "Abbeville", "003": "Aiken", "005": "Allendale", "007": "Anderson", "009": "Bamberg",
+    "011": "Barnwell", "013": "Beaufort", "015": "Berkeley", "017": "Calhoun", "019": "Charleston",
+    "021": "Cherokee", "023": "Chester", "025": "Chesterfield", "027": "Clarendon", "029": "Colleton",
+    "031": "Darlington", "033": "Dillon", "035": "Dorchester", "037": "Edgefield", "039": "Fairfield",
+    "041": "Florence", "043": "Georgetown", "045": "Greenville", "047": "Greenwood", "049": "Hampton",
+    "051": "Horry", "053": "Jasper", "055": "Kershaw", "057": "Lancaster", "059": "Laurens",
+    "061": "Lee", "063": "Lexington", "065": "McCormick", "067": "Marion", "069": "Marlboro",
+    "071": "Newberry", "073": "Oconee", "075": "Orangeburg", "077": "Pickens", "079": "Richland",
+    "081": "Saluda", "083": "Spartanburg", "085": "Sumter", "087": "Union", "089": "Williamsburg",
+    "091": "York",
+}
+
+
+def county_name(gisjoin):
+    # NHGIS GISJOIN codes look like 'G4500150': state 45, county 015
+    return f"{SC_COUNTIES.get(gisjoin[4:7], gisjoin)} County"
+
 
 # --- 1. LOAD DATA ---
 @st.cache_data
 def load_data():
-    # Load the "Digital Twin" of SC Housing
     try:
-        df_meta = pd.read_csv("sc_resstock_metadata.csv")
+        profiles = pd.read_parquet("sc_county_winter_profiles.parquet")
     except FileNotFoundError:
-        st.error("⚠️ Metadata CSV not found. Run 'pull_resstock_data.py' first.")
-        return pd.DataFrame(), pd.DataFrame()
+        st.error("⚠️ County profiles not found. Run 'build_county_profiles.py' first.")
+        st.stop()
+    profiles["timestamp"] = pd.to_datetime(profiles["timestamp"])
 
-    # Load the "Archetype" Load Profile (The single house timeseries)
     try:
-        df_ts = pd.read_csv("archetype_profile.csv")
-        df_ts['timestamp'] = pd.to_datetime(df_ts['timestamp'])
-        
-        # Filter to the "Cold Snap" week for the visual (Jan 16-19, 2018)
-        start_date = '2018-01-16'
-        end_date = '2018-01-19'
-        mask = (df_ts['timestamp'] >= start_date) & (df_ts['timestamp'] <= end_date)
-        df_ts = df_ts.loc[mask]
+        meta = pd.read_csv("sc_resstock_metadata.csv")
     except FileNotFoundError:
-        st.error("⚠️ Archetype CSV not found. Run 'analyze_single_home.py' first.")
-        return pd.DataFrame(), pd.DataFrame()
+        meta = pd.DataFrame()
+    return profiles, meta
 
-    return df_meta, df_ts
 
-df_meta, df_archetype = load_data()
+def ev_daily_profile_kw(daily_kwh, charger_kw, managed):
+    """Expected charging load (kW) per EV for each 15-minute slot of the day.
+
+    Unmanaged: drivers plug in when they get home (start times ~ normal around 6 PM).
+    Managed: charging starts are staggered across an off-peak window (11 PM - 2 AM).
+    """
+    slots = np.arange(24 * INTERVALS_PER_HOUR)
+    hours = slots / INTERVALS_PER_HOUR
+    if managed:
+        start_prob = ((hours >= 23) | (hours < 2)).astype(float)
+    else:
+        dist = np.minimum(np.abs(hours - 18), 24 - np.abs(hours - 18))  # circular distance from 6 PM
+        start_prob = np.exp(-0.5 * (dist / 1.5) ** 2)
+    start_prob /= start_prob.sum()
+
+    # Load from one EV that starts charging at slot 0
+    charge_slots = daily_kwh / charger_kw * INTERVALS_PER_HOUR
+    single = np.zeros(len(slots))
+    full = int(charge_slots)
+    single[:full] = charger_kw
+    single[full % len(slots)] += charger_kw * (charge_slots - full)
+
+    # Expected load = start-time distribution convolved (circularly) with one charging session
+    return np.real(np.fft.ifft(np.fft.fft(start_prob) * np.fft.fft(single)))
+
+
+profiles, meta = load_data()
 
 # --- 2. SIDEBAR CONTROLS ---
 st.sidebar.title("Grid Stress Controls")
 
-# A. County Filter
-# We map the raw county names to a cleaner list
-if not df_meta.empty:
-    # Ensure we sort only valid values (drop NaNs)
-    counties = sorted(df_meta['in.county'].dropna().unique())
-    selected_county = st.sidebar.selectbox("Select County / Feeder", counties)
-    
-    # Filter metadata for this county
-    county_homes = df_meta[df_meta['in.county'] == selected_county]
-else:
-    st.sidebar.warning("No data loaded")
-    county_homes = pd.DataFrame()
+counties = sorted(profiles["county"].unique(), key=county_name)
+selected = st.sidebar.selectbox("County", counties, index=counties.index("G4500450") if "G4500450" in counties else 0,
+                                format_func=county_name)
 
-# B. The "What-If" Slider
-adoption_rate = st.sidebar.slider(
-    "Heat Pump Adoption Rate (%)", 
-    min_value=0, 
-    max_value=100, 
-    value=20,
-    help="Percent of gas-heated homes switching to electric."
-)
+window = st.sidebar.radio("Time window", ["Cold snap (Jan 16-19, 2018)", "Full winter (Jan-Feb 2018)"])
 
-st.sidebar.markdown("---")
-st.sidebar.info(
-    """
-    **Simulation Logic:**
-    1. Identify Gas-Heated Homes (Target Market).
-    2. Apply Adoption Rate.
-    3. Inject simulated Heat Pump load (COP 3.0).
-    4. Calculate new aggregate Feeder Load.
-    """
-)
+st.sidebar.markdown("### Heat pumps")
+hp_rate = st.sidebar.slider("Adoption (% of gas, propane, and oil-heated homes)", 0, 100, 20)
+cop = st.sidebar.slider("Heat pump efficiency (COP)", 1.5, 4.0, 2.5, 0.1,
+                        help="Heat delivered per unit of electricity. Real heat pumps drop toward 2 or below in freezing weather.")
 
-# --- 3. MAIN DASHBOARD ---
+st.sidebar.markdown("### Electric vehicles")
+ev_rate = st.sidebar.slider("Adoption (% of households with an EV)", 0, 100, 20)
+daily_miles = st.sidebar.slider("Daily miles per EV", 10, 80, 30)
+kwh_per_mile = st.sidebar.slider("EV energy use (kWh/mile, winter)", 0.25, 0.50, 0.35, 0.01)
+charger_kw = st.sidebar.select_slider("Home charger power (kW)", [1.4, 3.3, 7.2, 11.5], value=7.2)
+managed = st.sidebar.radio("Charging behavior", ["Unmanaged (plug in on arrival)", "Managed (off-peak, 11 PM-2 AM)"]) != \
+    "Unmanaged (plug in on arrival)"
+
+# --- 3. CALCULATIONS ---
+df = profiles[profiles["county"] == selected].sort_values("timestamp").copy()
+if window.startswith("Cold snap"):
+    df = df[(df["timestamp"] > "2018-01-16") & (df["timestamp"] <= "2018-01-20")]
+
+homes = df["units"].iloc[0]
+fossil_heat_kwh = df["gas_heat_kwh"] + df["propane_heat_kwh"] + df["oil_heat_kwh"]
+
+# All loads in MW (kWh per interval * 4 = kW, / 1000 = MW)
+baseline_mw = df["elec_kwh"] * INTERVALS_PER_HOUR / 1000
+hp_mw = fossil_heat_kwh * FURNACE_EFFICIENCY / cop * (hp_rate / 100) * INTERVALS_PER_HOUR / 1000
+
+num_evs = homes * ev_rate / 100
+ev_profile_kw = ev_daily_profile_kw(daily_miles * kwh_per_mile, charger_kw, managed)
+# Timestamps mark the END of each 15-minute interval, so 00:15 is slot 0
+slot = ((df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute) // 15 - 1) % len(ev_profile_kw)
+ev_mw = pd.Series(ev_profile_kw[slot.to_numpy()] * num_evs / 1000, index=df.index)
+
+total_mw = baseline_mw + hp_mw + ev_mw
+old_peak, new_peak = baseline_mw.max(), total_mw.max()
+peak_time = df.loc[total_mw.idxmax(), "timestamp"]
+
+# --- 4. DASHBOARD ---
 st.title("IRA Electrification Impact Simulator")
-st.markdown(f"**Feeder Analysis:** {selected_county} (South Carolina)")
+st.markdown(f"**{county_name(selected)}, South Carolina** · residential load from NREL ResStock (all homes in the county)")
 
-if not county_homes.empty and not df_archetype.empty:
-    
-    # --- CALCULATIONS ---
-    # 1. Identify "Addressable Market" (Gas Homes)
-    # Check column names (handling variation between NREL releases)
-    heat_col = 'in.heating_fuel' if 'in.heating_fuel' in county_homes.columns else 'in.hvac_heating_type'
-    
-    # Filter for Gas (Natural Gas, Propane, etc.)
-    if heat_col in county_homes.columns:
-        gas_homes = county_homes[county_homes[heat_col].str.contains('Gas|Propane', case=False, na=False)]
-    else:
-        st.error(f"Could not find heating column. Available: {county_homes.columns}")
-        gas_homes = pd.DataFrame()
+fuel_shares = (meta.loc[meta["in.county"] == selected, "in.heating_fuel"].value_counts(normalize=True)
+               if not meta.empty else pd.Series(dtype=float))
+fossil_share = fuel_shares.drop("Electricity", errors="ignore").sum()
+num_heat_pumps = homes * fossil_share * hp_rate / 100
 
-    total_gas_homes = len(gas_homes)
-    
-    # 2. Number of Converts
-    num_converts = int(total_gas_homes * (adoption_rate / 100))
-    
-    # 3. Scale the Loads (Math: Single Home * Number of Homes)
-    # We divide by 1000 to convert kWh -> MWh (Megawatts)
-    
-    # Baseline: The existing load of ALL gas homes in this county
-    # (Using the archetype's electric load as the average)
-    baseline_curve = (df_archetype['out.electricity.total.energy_consumption'] * total_gas_homes) / 1000
-    
-    # Added Load: The curve of the NEW heat pumps
-    # (We calculated 'hp_added_load' in the previous script)
-    added_curve = (df_archetype['hp_added_load'] * num_converts) / 1000
-    
-    # Total New Load
-    new_total_curve = baseline_curve + added_curve
-    
-    # Peak Analysis
-    old_peak = baseline_curve.max()
-    new_peak = new_total_curve.max()
-    peak_growth = new_peak - old_peak
-    pct_increase = (peak_growth / old_peak) * 100 if old_peak > 0 else 0
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Homes in county", f"{homes:,.0f}")
+c2.metric("New heat pumps / EVs", f"{num_heat_pumps:,.0f} / {num_evs:,.0f}")
+c3.metric("Peak residential load (MW)", f"{new_peak:,.1f}", delta=f"+{new_peak - old_peak:,.1f} MW", delta_color="inverse")
+c4.metric("Peak increase", f"{(new_peak / old_peak - 1) * 100:.1f}%" if old_peak > 0 else "n/a", delta_color="inverse")
 
-    # --- TOP METRICS ROW ---
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Eligible Gas Homes", f"{total_gas_homes:,}")
-    c2.metric("Projected Installs", f"{num_converts:,}", border=True)
-    c3.metric("New Peak Load (MW)", f"{new_peak:.2f}", delta=f"+{peak_growth:.2f} MW")
-    c4.metric("Grid Stress Increase", f"{pct_increase:.1f}%", delta_color="inverse")
+st.subheader(window)
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=df["timestamp"], y=baseline_mw, name="Current residential load",
+                         stackgroup="load", line=dict(color="#1f77b4", width=0.5)))
+fig.add_trace(go.Scatter(x=df["timestamp"], y=hp_mw, name=f"Added: heat pumps ({hp_rate}% adoption)",
+                         stackgroup="load", line=dict(color="#d62728", width=0.5)))
+fig.add_trace(go.Scatter(x=df["timestamp"], y=ev_mw, name=f"Added: EV charging ({ev_rate}% adoption)",
+                         stackgroup="load", line=dict(color="#ff7f0e", width=0.5)))
+fig.update_layout(height=500, hovermode="x unified", yaxis_title="Residential load (MW)",
+                  xaxis_title="Time", legend=dict(y=1.12, orientation="h"))
+st.plotly_chart(fig, width="stretch")
 
-    # --- THE CHART ---
-    st.subheader("Winter Storm Simulation (Jan 16-19)")
-    
-    fig = go.Figure()
+at_peak = df.index[total_mw.argmax()]
+st.markdown(
+    f"**New peak:** {peak_time:%a %b %d, %I:%M %p} · "
+    f"current load {baseline_mw[at_peak]:,.1f} MW + heat pumps {hp_mw[at_peak]:,.1f} MW + EVs {ev_mw[at_peak]:,.1f} MW"
+)
 
-    # Blue Area (Current State)
-    fig.add_trace(go.Scatter(
-        x=df_archetype['timestamp'],
-        y=baseline_curve,
-        mode='lines',
-        name='Current Grid Load',
-        line=dict(color='#1f77b4', width=2),
-        fill='tozeroy'
-    ))
-
-    # Red Line (Future State)
-    fig.add_trace(go.Scatter(
-        x=df_archetype['timestamp'],
-        y=new_total_curve,
-        mode='lines',
-        name=f'Projected Load ({adoption_rate}% Adoption)',
-        line=dict(color='#d62728', width=3, dash='solid')
-    ))
-
-    fig.update_layout(
-        height=500,
-        hovermode="x unified",
-        yaxis_title="Aggregate Load (Megawatts)",
-        xaxis_title="Time",
-        legend=dict(y=1.1, orientation="h")
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-    # --- RISK TABLE (Robust Fix) ---
-    st.markdown("### High-Priority Intervention List")
-    st.caption("These homes match the 'High Income + Gas Heat' profile (Free Rider Risk).")
-    
-    # CHECK: Does the income column actually exist?
-    high_risk = pd.DataFrame()
-    
-    if 'in.income' in gas_homes.columns:
-        # If yes, filter for High Income ($100k+ or $200k+)
-        # Using a regex to catch different income bin labels
-        high_risk = gas_homes[gas_homes['in.income'].str.contains('100|200', regex=True, na=False)]
-        
-        if not high_risk.empty:
-            st.success(f"Identified {len(high_risk)} high-income households for targeting.")
-        else:
-            st.info("No high-income households found in this subset.")
-            high_risk = gas_homes # Fallback to showing all gas homes
-    else:
-        # If no, show a warning and skip the income filter
-        st.warning("⚠️ Income data not available for this region. Showing all eligible gas homes.")
-        high_risk = gas_homes
-
-    # Display clean table
-    display_cols = ['bldg_id', 'in.city', 'in.sqft', 'in.vintage', 'in.income', 'in.heating_fuel']
-    
-    # Only try to display columns that actually exist
-    valid_cols = [c for c in display_cols if c in high_risk.columns]
-    
-    st.dataframe(
-        high_risk[valid_cols].head(50),
-        use_container_width=True,
-        hide_index=True
-    )
-
-else:
-    st.write("Waiting for data...")
+# --- 5. HOUSING STOCK ---
+if not fuel_shares.empty:
+    st.markdown("### Housing stock by heating fuel")
+    st.caption("Shares from the ResStock sample for this county, scaled to the county's total homes.")
+    stock = pd.DataFrame({"Heating fuel": fuel_shares.index, "Share of homes": (fuel_shares.values * 100).round(1),
+                          "Estimated homes": (fuel_shares.values * homes).round(-1).astype(int)})
+    st.dataframe(stock, width="stretch", hide_index=True)
