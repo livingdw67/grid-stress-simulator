@@ -61,7 +61,7 @@ pip install pytest
 pytest
 ```
 
-27 tests run on every push through GitHub Actions:
+25 tests run on every push through GitHub Actions:
 * **Model checks** on synthetic data: each EV charging curve delivers exactly the daily energy and never exceeds the charger's power, managed charging stays overnight, and heat pump load scales correctly with adoption and COP.
 * **Findings checks** on the committed data: every Greenville County number in the section above is recomputed and must match.
 * **Dashboard check:** the Streamlit app runs headlessly with both charging modes.
