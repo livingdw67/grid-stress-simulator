@@ -1,5 +1,7 @@
 # IRA Grid Stress Simulator
 
+[![tests](https://github.com/livingdw67/grid-stress-simulator/actions/workflows/tests.yml/badge.svg)](https://github.com/livingdw67/grid-stress-simulator/actions/workflows/tests.yml)
+
 **How much do Inflation Reduction Act incentives for heat pumps and electric vehicles raise winter peak load on South Carolina's grid?**
 
 ![Dashboard view](App_view.png)
@@ -52,6 +54,20 @@ streamlit run app.py              # 3. Launch the dashboard
 
 The processed data files are committed, so you can go straight to step 3.
 
+## Tests
+
+```bash
+pip install pytest
+pytest
+```
+
+27 tests run on every push through GitHub Actions:
+* **Model checks** on synthetic data: each EV charging curve delivers exactly the daily energy and never exceeds the charger's power, managed charging stays overnight, and heat pump load scales correctly with adoption and COP.
+* **Findings checks** on the committed data: every Greenville County number in the section above is recomputed and must match.
+* **Dashboard check:** the Streamlit app runs headlessly with both charging modes.
+
+The load model lives in `grid_model.py`, separate from the dashboard in `app.py`.
+
 `analyze_single_home.py` is a standalone deep dive showing how one gas-heated home's load changes after switching to a heat pump (`grid_stress_test_chart.png`).
 
 ## Limitations and Next Steps
@@ -63,4 +79,4 @@ The processed data files are committed, so you can go straight to step 3.
 
 ## Tech Stack
 
-Python, pandas, NumPy, PyArrow, s3fs (NREL public S3), Streamlit, Plotly, Matplotlib, Seaborn
+Python, pandas, NumPy, PyArrow, s3fs (NREL public S3), Streamlit, Plotly, Matplotlib, Seaborn, pytest, GitHub Actions
