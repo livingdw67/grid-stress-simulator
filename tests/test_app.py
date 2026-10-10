@@ -1,10 +1,7 @@
 """Runs the Streamlit dashboard headlessly and checks it renders without errors."""
 from pathlib import Path
 
-import pytest
-
-pytest.importorskip("pyarrow")
-AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 

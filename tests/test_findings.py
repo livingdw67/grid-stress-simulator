@@ -11,8 +11,6 @@ import pytest
 
 from grid_model import stacked_load_mw
 
-pytest.importorskip("pyarrow")
-
 DATA = Path(__file__).resolve().parent.parent / "sc_county_winter_profiles.parquet"
 GREENVILLE = "G4500450"
 SCENARIO = dict(hp_rate=20, cop=2.5, ev_rate=20, daily_kwh=30 * 0.35, charger_kw=7.2)
