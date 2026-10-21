@@ -1,33 +1,11 @@
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from grid_model import county_name, stacked_load_mw
+
 # --- CONFIGURATION ---
 st.set_page_config(page_title="IRA Grid Stress Simulator", layout="wide")
-
-# ResStock reports energy per 15-minute interval (kWh). Average power over the
-# interval (kW) = kWh / 0.25 h = kWh * 4.
-INTERVALS_PER_HOUR = 4
-FURNACE_EFFICIENCY = 0.80  # Share of fuel energy a typical gas/propane/oil furnace delivers as heat
-
-SC_COUNTIES = {
-    "001": "Abbeville", "003": "Aiken", "005": "Allendale", "007": "Anderson", "009": "Bamberg",
-    "011": "Barnwell", "013": "Beaufort", "015": "Berkeley", "017": "Calhoun", "019": "Charleston",
-    "021": "Cherokee", "023": "Chester", "025": "Chesterfield", "027": "Clarendon", "029": "Colleton",
-    "031": "Darlington", "033": "Dillon", "035": "Dorchester", "037": "Edgefield", "039": "Fairfield",
-    "041": "Florence", "043": "Georgetown", "045": "Greenville", "047": "Greenwood", "049": "Hampton",
-    "051": "Horry", "053": "Jasper", "055": "Kershaw", "057": "Lancaster", "059": "Laurens",
-    "061": "Lee", "063": "Lexington", "065": "McCormick", "067": "Marion", "069": "Marlboro",
-    "071": "Newberry", "073": "Oconee", "075": "Orangeburg", "077": "Pickens", "079": "Richland",
-    "081": "Saluda", "083": "Spartanburg", "085": "Sumter", "087": "Union", "089": "Williamsburg",
-    "091": "York",
-}
-
-
-def county_name(gisjoin):
-    # NHGIS GISJOIN codes look like 'G4500150': state 45, county 015
-    return f"{SC_COUNTIES.get(gisjoin[4:7], gisjoin)} County"
 
 
 # --- 1. LOAD DATA ---
@@ -45,32 +23,6 @@ def load_data():
     except FileNotFoundError:
         meta = pd.DataFrame()
     return profiles, meta
-
-
-def ev_daily_profile_kw(daily_kwh, charger_kw, managed):
-    """Expected charging load (kW) per EV for each 15-minute slot of the day.
-
-    Unmanaged: drivers plug in when they get home (start times ~ normal around 6 PM).
-    Managed: charging starts are staggered across an off-peak window (11 PM - 2 AM).
-    """
-    slots = np.arange(24 * INTERVALS_PER_HOUR)
-    hours = slots / INTERVALS_PER_HOUR
-    if managed:
-        start_prob = ((hours >= 23) | (hours < 2)).astype(float)
-    else:
-        dist = np.minimum(np.abs(hours - 18), 24 - np.abs(hours - 18))  # circular distance from 6 PM
-        start_prob = np.exp(-0.5 * (dist / 1.5) ** 2)
-    start_prob /= start_prob.sum()
-
-    # Load from one EV that starts charging at slot 0
-    charge_slots = daily_kwh / charger_kw * INTERVALS_PER_HOUR
-    single = np.zeros(len(slots))
-    full = int(charge_slots)
-    single[:full] = charger_kw
-    single[full % len(slots)] += charger_kw * (charge_slots - full)
-
-    # Expected load = start-time distribution convolved (circularly) with one charging session
-    return np.real(np.fft.ifft(np.fft.fft(start_prob) * np.fft.fft(single)))
 
 
 profiles, meta = load_data()
@@ -103,19 +55,9 @@ if window.startswith("Cold snap"):
     df = df[(df["timestamp"] > "2018-01-16") & (df["timestamp"] <= "2018-01-20")]
 
 homes = df["units"].iloc[0]
-fossil_heat_kwh = df["gas_heat_kwh"] + df["propane_heat_kwh"] + df["oil_heat_kwh"]
-
-# All loads in MW (kWh per interval * 4 = kW, / 1000 = MW)
-baseline_mw = df["elec_kwh"] * INTERVALS_PER_HOUR / 1000
-hp_mw = fossil_heat_kwh * FURNACE_EFFICIENCY / cop * (hp_rate / 100) * INTERVALS_PER_HOUR / 1000
-
 num_evs = homes * ev_rate / 100
-ev_profile_kw = ev_daily_profile_kw(daily_miles * kwh_per_mile, charger_kw, managed)
-# Timestamps mark the END of each 15-minute interval, so 00:15 is slot 0
-slot = ((df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute) // 15 - 1) % len(ev_profile_kw)
-ev_mw = pd.Series(ev_profile_kw[slot.to_numpy()] * num_evs / 1000, index=df.index)
-
-total_mw = baseline_mw + hp_mw + ev_mw
+loads = stacked_load_mw(df, hp_rate, cop, ev_rate, daily_miles * kwh_per_mile, charger_kw, managed)
+baseline_mw, hp_mw, ev_mw, total_mw = loads["baseline"], loads["heat_pumps"], loads["evs"], loads["total"]
 old_peak, new_peak = baseline_mw.max(), total_mw.max()
 peak_time = df.loc[total_mw.idxmax(), "timestamp"]
 
