@@ -5,7 +5,8 @@ import streamlit as st
 from grid_model import county_name, stacked_load_mw
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="IRA Grid Stress Simulator", layout="wide")
+# Theme comes from .streamlit/config.toml (Daniel Livingston brand: navy, teal, one amber highlight)
+st.set_page_config(page_title="IRA Grid Stress Simulator", page_icon="assets/favicon.png", layout="wide")
 
 
 # --- 1. LOAD DATA ---
@@ -14,7 +15,7 @@ def load_data():
     try:
         profiles = pd.read_parquet("sc_county_winter_profiles.parquet")
     except FileNotFoundError:
-        st.error("⚠️ County profiles not found. Run 'build_county_profiles.py' first.")
+        st.error("County profiles not found. Run 'build_county_profiles.py' first.")
         st.stop()
     profiles["timestamp"] = pd.to_datetime(profiles["timestamp"])
 
@@ -63,6 +64,9 @@ peak_time = df.loc[total_mw.idxmax(), "timestamp"]
 
 # --- 4. DASHBOARD ---
 st.title("IRA Electrification Impact Simulator")
+# The brand's short amber rule under the headline
+st.markdown('<div style="width:56px;height:4px;background:#f0a742;border-radius:2px;margin:-0.5rem 0 1rem"></div>',
+            unsafe_allow_html=True)
 st.markdown(f"**{county_name(selected)}, South Carolina** · residential load from NREL ResStock (all homes in the county)")
 
 fuel_shares = (meta.loc[meta["in.county"] == selected, "in.heating_fuel"].value_counts(normalize=True)
@@ -79,13 +83,16 @@ c4.metric("Peak increase", f"{(new_peak / old_peak - 1) * 100:.1f}%" if old_peak
 st.subheader(window)
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=df["timestamp"], y=baseline_mw, name="Current residential load",
-                         stackgroup="load", line=dict(color="#1f77b4", width=0.5)))
+                         stackgroup="load", line=dict(color="#5fc4c0", width=0.5), fillcolor="rgba(95, 196, 192, 0.55)"))
 fig.add_trace(go.Scatter(x=df["timestamp"], y=hp_mw, name=f"Added: heat pumps ({hp_rate}% adoption)",
-                         stackgroup="load", line=dict(color="#d62728", width=0.5)))
+                         stackgroup="load", line=dict(color="#f0a742", width=0.5), fillcolor="rgba(240, 167, 66, 0.85)"))
 fig.add_trace(go.Scatter(x=df["timestamp"], y=ev_mw, name=f"Added: EV charging ({ev_rate}% adoption)",
-                         stackgroup="load", line=dict(color="#ff7f0e", width=0.5)))
+                         stackgroup="load", line=dict(color="#7fa6d1", width=0.5), fillcolor="rgba(127, 166, 209, 0.85)"))
 fig.update_layout(height=500, hovermode="x unified", yaxis_title="Residential load (MW)",
-                  xaxis_title="Time", legend=dict(y=1.12, orientation="h"))
+                  xaxis_title="Time", legend=dict(y=1.12, orientation="h"),
+                  paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#9fb1c7"))
+fig.update_xaxes(gridcolor="#2b3f58", linecolor="#2b3f58")
+fig.update_yaxes(gridcolor="#2b3f58", linecolor="#2b3f58", zerolinecolor="#2b3f58")
 st.plotly_chart(fig, width="stretch")
 
 at_peak = df.index[total_mw.argmax()]
