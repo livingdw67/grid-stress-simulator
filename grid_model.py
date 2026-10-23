@@ -23,11 +23,38 @@ SC_COUNTIES = {
     "081": "Saluda", "083": "Spartanburg", "085": "Sumter", "087": "Union", "089": "Williamsburg",
     "091": "York",
 }
+ALL_COUNTIES = "ALL"  # County code for the statewide total built by add_statewide()
+
+# Guide bands drawn on the dashboard sliders: values a planner could reasonably expect by about 2035.
+# Users can still slide past them. Arithmetic and sources are in the README ("Slider guide bands").
+GUIDE_BANDS = {
+    # Furnaces last 15-20 years, so 50-67% are replaced by 2035; 10-40% of those switching to a heat pump
+    # gives 5-27% of fossil-heated homes
+    "hp_rate": (5, 25),
+    # ENERGY STAR cold-climate floor (1.75 at 5°F) up to a high-efficiency unit's seasonal COP (HSPF2 10 / 3.412)
+    "cop": (1.8, 3.0),
+    # EVs are ~1% of SC vehicles today; ~55% of vehicles are replaced by 2035, and EVs taking 4-20% of those
+    # sales gives 3-12% of vehicles, or 5-19% of households at 1.6 vehicles per household
+    "ev_rate": (5, 20),
+    # FHWA 2023 average is 11,106 miles a year (30 a day); second cars drive less, rural commutes more
+    "daily_miles": (25, 40),
+    # Popular EVs are rated 0.28-0.33 kWh/mile; at 32°F to 20°F they keep 88-70% of their range
+    "kwh_per_mile": (0.32, 0.47),
+}
 
 
 def county_name(gisjoin):
+    if gisjoin == ALL_COUNTIES:
+        return "All counties"
     # NHGIS GISJOIN codes look like 'G4500150': state 45, county 015
     return f"{SC_COUNTIES.get(gisjoin[4:7], gisjoin)} County"
+
+
+def add_statewide(profiles):
+    """Append statewide rows (county = ALL_COUNTIES): homes and energy summed over every county."""
+    state = profiles.drop(columns="county").groupby("timestamp", as_index=False).sum()
+    state["county"] = ALL_COUNTIES
+    return pd.concat([profiles, state], ignore_index=True)
 
 
 def ev_daily_profile_kw(daily_kwh, charger_kw, managed):
