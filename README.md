@@ -4,7 +4,9 @@
 
 **How much do Inflation Reduction Act incentives for heat pumps and electric vehicles raise winter peak load on South Carolina's grid?**
 
-![Dashboard view](App_view.png)
+**[Try it live →](https://grid-stress-simulator.streamlit.app)** Pick a county, set heat pump and EV adoption, and see the new winter peak. No setup needed.
+
+[![Dashboard view](App_view.png)](https://grid-stress-simulator.streamlit.app)
 
 ## Why It Matters
 
