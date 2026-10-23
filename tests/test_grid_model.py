@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from grid_model import (INTERVALS_PER_HOUR, SLOTS_PER_DAY, county_name, ev_daily_profile_kw,
-                        interval_slot, stacked_load_mw)
+from grid_model import (ALL_COUNTIES, INTERVALS_PER_HOUR, SLOTS_PER_DAY, add_statewide, county_name,
+                        ev_daily_profile_kw, interval_slot, stacked_load_mw)
 
 HOURS = np.arange(SLOTS_PER_DAY) / INTERVALS_PER_HOUR
 
@@ -47,11 +47,12 @@ def test_county_name():
     assert county_name("G4500450") == "Greenville County"
     assert county_name("G4500010") == "Abbeville County"
     assert county_name("G4509990") == "G4509990 County"
+    assert county_name(ALL_COUNTIES) == "All counties"
 
 
-def synthetic_county(days=2, homes=1000):
+def synthetic_county(days=2, homes=1000, seed=0):
     ts = pd.date_range("2018-01-16 00:15", periods=days * SLOTS_PER_DAY, freq="15min")
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(seed)
     return pd.DataFrame({
         "timestamp": ts,
         "units": homes,
@@ -95,3 +96,19 @@ def test_ev_energy_over_whole_days_matches_fleet_demand(managed):
                             charger_kw=7.2, managed=managed)
     fleet_mwh = loads["evs"].sum() / INTERVALS_PER_HOUR
     assert fleet_mwh == pytest.approx(days * homes * 0.20 * 10.5 / 1000)
+
+
+def test_statewide_rows_sum_every_county():
+    a = synthetic_county(homes=1000, seed=1).assign(county="G4500010")
+    b = synthetic_county(homes=500, seed=2).assign(county="G4500030")
+    profiles = add_statewide(pd.concat([a, b], ignore_index=True))
+    state = profiles[profiles["county"] == ALL_COUNTIES].reset_index(drop=True)
+
+    assert len(profiles) == 3 * len(a)
+    assert (state["units"] == 1500).all()
+    np.testing.assert_allclose(state["elec_kwh"], a["elec_kwh"] + b["elec_kwh"])
+
+    # The model is linear in homes and energy, so the statewide load equals the sum of the county loads
+    args = dict(hp_rate=20, cop=2.5, ev_rate=20, daily_kwh=10.5, charger_kw=7.2, managed=True)
+    county_total = stacked_load_mw(a, **args)["total"].to_numpy() + stacked_load_mw(b, **args)["total"].to_numpy()
+    np.testing.assert_allclose(stacked_load_mw(state, **args)["total"], county_total)
