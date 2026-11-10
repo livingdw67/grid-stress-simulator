@@ -96,3 +96,7 @@ The load model lives in `grid_model.py`, separate from the dashboard in `app.py`
 ## Tech Stack
 
 Python, pandas, NumPy, PyArrow, s3fs (NREL public S3), Streamlit, Plotly, Matplotlib, Seaborn, pytest, GitHub Actions
+
+## License
+
+MIT ([LICENSE](LICENSE)). Load profiles are built from NREL ResStock county aggregates on NREL's public S3 data lake.
